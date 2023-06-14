@@ -2,6 +2,8 @@
 #include <mmsystem.h>
 #include <d3dx9.h>
 #include <dinput.h>
+#include <Dshow.h>
+#include "Camera.h"
 
 #pragma comment (lib, "d3d9.lib")
 #pragma comment (lib, "d3dx9.lib")
@@ -17,6 +19,9 @@ D3DMATERIAL9*           g_pMeshMaterials = NULL;
 LPDIRECT3DTEXTURE9*     g_pMeshTextures = NULL;
 DWORD                   g_dwNumMaterials = 0L;
 
+LPDIRECT3DVERTEXBUFFER9		g_pSkyboxVertexBuffer = NULL;
+LPDIRECT3DTEXTURE9			g_pSkyboxTextures[6];
+
 LPDIRECTINPUT8				g_pDin;
 LPDIRECTINPUTDEVICE8		g_pDinKeyboard;
 
@@ -26,8 +31,59 @@ DIMOUSESTATE				mouse_state;
 
 BYTE						g_Keystate[256];
 
-float rotateY = 0;
-float translateX = 0;
+CXCamera* camera;
+
+HWND	hWnd;
+IGraphBuilder* pGraph = NULL;
+IMediaControl* pControl = NULL;
+IMediaEventEx* pEvent = NULL;
+
+float angle = 0;
+float x = 0;
+float y = -40;
+float z = 0;
+
+#define D3DFVF_CVERTEX (D3DFVF_XYZ | D3DFVF_TEX1)
+#define   WM_GRAPHNOTIFY    WM_APP + 1
+
+struct CUSTOMVERTEX
+{
+    float x, y, z;
+    float tu, tv;
+};
+
+CUSTOMVERTEX g_Skybox[24] =
+{
+    { -10.0f, -10.0f, 10.0f, 0.0f, 1.0f },
+    { -10.0f, 10.0f, 10.0f, 0.0f, 0.0f },
+    { 10.0f, -10.0f, 10.0f, 1.0f, 1.0f },
+    { 10.0f, 10.0f, 10.0f, 1.0f, 0.0f },
+
+    { 10.0f, -10.0f, -10.0f, 0.0f, 1.0f },
+    { 10.0f, 10.0f, -10.0f, 0.0f, 0.0f },
+    { -10.0f, -10.0f, -10.0f, 1.0f, 1.0f },
+    { -10.0f, 10.0f, -10.0f, 1.0f, 0.0f },
+
+    { -10.0f, -10.0f, -10.0f, 0.0f, 1.0f },
+    { -10.0f, 10.0f, -10.0f, 0.0f, 0.0f },
+    { -10.0f, -10.0f, 10.0f, 1.0f, 1.0f },
+    { -10.0f, 10.0f, 10.0f, 1.0f, 0.0f },
+
+    { 10.0f, -10.0f, 10.0f, 0.0f, 1.0f },
+    { 10.0f, 10.0f, 10.0f, 0.0f, 0.0f },
+    { 10.0f, -10.0f, -10.0f, 1.0f, 1.0f },
+    { 10.0f, 10.0f, -10.0f, 1.0f, 0.0f },
+
+    { -10.0f, 10.0f, 10.0f, 0.0f, 1.0f },
+    { -10.0f, 10.0f, -10.0f, 0.0f, 0.0f },
+    { 10.0f, 10.0f, 10.0f, 1.0f, 1.0f },
+    { 10.0f, 10.0f, -10.0f, 1.0f, 0.0f },
+
+    { -10.0f, -10.0f, -10.0f, 0.0f, 1.0f },
+    { -10.0f, -10.0f, 10.0f, 0.0f, 0.0f },
+    { 10.0f, -10.0f, -10.0f, 1.0f, 1.0f },
+    { 10.0f, -10.0f, 10.0f, 1.0f, 0.0f }
+};
 
 HRESULT InitD3D(HWND hWnd)
 {
@@ -55,6 +111,18 @@ HRESULT InitD3D(HWND hWnd)
     g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, TRUE);
 
     g_pd3dDevice->SetRenderState(D3DRS_AMBIENT, 0xffffffff);
+
+    camera = new CXCamera(g_pd3dDevice);
+
+
+    D3DXVECTOR3 vEyePt(0.0f, -39.0f, 4.0f);
+    D3DXVECTOR3 vLookatPt(0.0f, -39.0f, 0.0f);
+    D3DXVECTOR3 vUpVec(0.0f, 1.0f, 0.0f);
+    camera->LookAtPos(&vEyePt, &vLookatPt, &vUpVec);
+    camera->MoveRight(1);
+    camera->MoveForward(-4);
+
+    camera->Update();
 
     return S_OK;
 }
@@ -97,13 +165,33 @@ VOID DetectInput()
 void ProccesInput()
 {
     if (g_Keystate[DIK_S] & 0x80)
-        translateX -= 0.1;
+        x -= 0.1;
     if (g_Keystate[DIK_W] & 0x80)
-        translateX += 0.1;
+        x += 0.1;
     if (g_Keystate[DIK_D] & 0x80)
-        rotateY += 0.1;
+        angle += 0.1;
     if (g_Keystate[DIK_A] & 0x80)
-        rotateY -= 0.1;
+        angle -= 0.1;
+
+    if (g_Keystate[DIK_UP] & 0x80)
+        camera->MoveForward(0.5);
+    if (g_Keystate[DIK_DOWN] & 0x80)
+        camera->MoveForward(-0.5);
+
+    if (g_Keystate[DIK_LEFT] & 0x80)
+        camera->MoveRight(-0.5);
+    if (g_Keystate[DIK_RIGHT] & 0x80)
+        camera->MoveRight(0.5);
+
+    if (mouse_state.rgbButtons[0] & 0x80)
+        camera->RotateRight(-0.05);
+    if (mouse_state.rgbButtons[1] & 0x80)
+        camera->RotateRight(0.05);
+
+    if (mouse_state.lZ & 0x80)
+        camera->RotateDown(0.05);
+    if (-mouse_state.lZ & 0x80)
+        camera->RotateDown(-0.05);
 }
 
 HRESULT InitGeometry()
@@ -126,6 +214,33 @@ HRESULT InitGeometry()
             return E_FAIL;
         }
     }
+
+    hRet = D3DXCreateTextureFromFile(g_pd3dDevice,  ("Skybox\\sahara_ft.tga"), &g_pSkyboxTextures[0]);
+    hRet |= D3DXCreateTextureFromFile(g_pd3dDevice, ("Skybox\\sahara_bk.tga"), &g_pSkyboxTextures[1]);
+    hRet |= D3DXCreateTextureFromFile(g_pd3dDevice, ("Skybox\\sahara_rt.tga"), &g_pSkyboxTextures[2]);
+    hRet |= D3DXCreateTextureFromFile(g_pd3dDevice, ("Skybox\\sahara_lf.tga"), &g_pSkyboxTextures[3]);
+    hRet |= D3DXCreateTextureFromFile(g_pd3dDevice, ("Skybox\\sahara_up.tga"), &g_pSkyboxTextures[4]);
+    hRet |= D3DXCreateTextureFromFile(g_pd3dDevice, ("Skybox\\sahara_dn.tga"), &g_pSkyboxTextures[5]);
+
+    if (FAILED(hRet))
+    {
+        ::MessageBox(NULL, "Could not open one or more image files", "Error Opening Texture Files", MB_OK | MB_ICONSTOP);
+        return false;
+    }
+
+    if (FAILED(g_pd3dDevice->CreateVertexBuffer(24 * sizeof(CUSTOMVERTEX),
+        0, D3DFVF_CVERTEX,
+        D3DPOOL_DEFAULT, &g_pSkyboxVertexBuffer, NULL)))
+    {
+        return E_FAIL;
+    }
+
+    VOID* pVertices;
+    if (FAILED(g_pSkyboxVertexBuffer->Lock(0, sizeof(g_Skybox), (void**)&pVertices, 0)))
+        return E_FAIL;
+    memcpy(pVertices, g_Skybox, sizeof(g_Skybox));
+    g_pSkyboxVertexBuffer->Unlock();
+
 
     D3DXMATERIAL* d3dxMaterials = (D3DXMATERIAL*)pD3DXMtrlBuffer->GetBufferPointer();
     g_pMeshMaterials = new D3DMATERIAL9[g_dwNumMaterials];
@@ -192,7 +307,7 @@ VOID Cleanup()
 
 VOID SetupMatrices()
 {
-    D3DXMATRIX g_Transform;
+    /*D3DXMATRIX g_Transform;
     D3DXMatrixIdentity(&g_Transform);
     g_pd3dDevice->SetTransform(D3DTS_WORLD, &g_Transform);
     D3DXVECTOR3 vEyePt(0.0f, 3.0f, -5.0f);
@@ -203,7 +318,61 @@ VOID SetupMatrices()
     g_pd3dDevice->SetTransform(D3DTS_VIEW, &matView);
     D3DXMATRIXA16 matProj;
     D3DXMatrixPerspectiveFovLH(&matProj, D3DX_PI / 4, 1.0f, 1.0f, 100.0f);
+    g_pd3dDevice->SetTransform(D3DTS_PROJECTION, &matProj);*/
+
+    D3DXMATRIX matWorld;
+    g_pd3dDevice->SetTransform(D3DTS_WORLD, &matWorld);
+
+    D3DXMATRIXA16 matProj;
+    D3DXMatrixPerspectiveFovLH(&matProj, D3DX_PI / 4, 1.0f, 1.0f, 500.0f);
     g_pd3dDevice->SetTransform(D3DTS_PROJECTION, &matProj);
+    //D3DXMatrixTranslation(&matWorld, dx, dy, dz);
+
+    g_pd3dDevice->SetTransform(D3DTS_WORLD, &matWorld);
+
+    camera->Update();
+}
+
+HRESULT InitDirectShow(HWND hWnd)
+{
+    CoInitialize(NULL);
+    HRESULT hr = CoCreateInstance(CLSID_FilterGraph, NULL,
+        CLSCTX_INPROC_SERVER, IID_IGraphBuilder, (void**)&pGraph);
+
+    hr = pGraph->QueryInterface(IID_IMediaControl, (void**)&pControl);
+    hr = pGraph->QueryInterface(IID_IMediaEventEx, (void**)&pEvent);
+
+    hr = pGraph->RenderFile(L"WarSounds.wav", NULL);
+
+    pEvent->SetNotifyWindow((OAHWND)hWnd, WM_GRAPHNOTIFY, 0);
+
+    pControl->Run();
+
+
+    return S_OK;
+}
+
+void HandleGraphEvent()
+{
+    if (pEvent == NULL)
+    {
+        return;
+    }
+    long evCode;
+    LONG_PTR param1, param2;
+
+    while (SUCCEEDED(pEvent->GetEvent(&evCode, &param1, &param2, 0)))
+    {
+        pEvent->FreeEventParams(evCode, param1, param2);
+        switch (evCode)
+        {
+        case EC_COMPLETE:
+        case EC_USERABORT:
+        case EC_ERRORABORT:
+            InitDirectShow(hWnd);
+            return;
+        }
+    }
 }
 
 VOID Render()
@@ -214,24 +383,45 @@ VOID Render()
     if (SUCCEEDED(g_pd3dDevice->BeginScene()))
     {
         SetupMatrices();
+        HandleGraphEvent();
 
         D3DXMATRIX g_Transform;
         D3DXMATRIX g_TranslateX;
         D3DXMATRIX g_RotateY;
 
+        D3DXMATRIXA16 matScaleSkybox;
+        D3DXMatrixScaling(&matScaleSkybox, 4, 4, 4);
+        g_pd3dDevice->SetTransform(D3DTS_WORLD, &matScaleSkybox);
+
+        g_pd3dDevice->SetRenderState(D3DRS_LIGHTING, FALSE);
+        g_pd3dDevice->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+
+        g_pd3dDevice->SetStreamSource(0, g_pSkyboxVertexBuffer, 0, sizeof(CUSTOMVERTEX));
+        g_pd3dDevice->SetFVF(D3DFVF_CVERTEX);
+
+        for (ULONG i = 0; i < 6; ++i)
+        {
+            g_pd3dDevice->SetTexture(0, g_pSkyboxTextures[i]);
+
+            g_pd3dDevice->DrawPrimitive(D3DPT_TRIANGLESTRIP, i * 4, 2);
+
+        }
+
         D3DXMatrixIdentity(&g_Transform);
         D3DXMatrixIdentity(&g_TranslateX);
         D3DXMatrixIdentity(&g_RotateY);
-        D3DXMatrixTranslation(&g_TranslateX, translateX, 0, 0);
-        D3DXMatrixRotationY(&g_RotateY, rotateY);
+        D3DXMatrixTranslation(&g_TranslateX, x, -40, 0);
+        D3DXMatrixRotationY(&g_RotateY, angle);
         g_Transform = g_TranslateX * g_RotateY;
         g_pd3dDevice->SetTransform(D3DTS_WORLD, &g_Transform);
+
+        g_pd3dDevice->SetRenderState(D3DRS_LIGHTING, TRUE);
+        g_pd3dDevice->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
 
         for (DWORD i = 0; i < g_dwNumMaterials; i++)
         {
             g_pd3dDevice->SetMaterial(&g_pMeshMaterials[i]);
             g_pd3dDevice->SetTexture(0, g_pMeshTextures[i]);
-            //SetupMatrices();
             g_pMesh->DrawSubset(i);
         }
 
@@ -268,6 +458,9 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, INT)
     if (SUCCEEDED(InitD3D(hWnd)))
     {
         InitDInput(hInst, hWnd);
+        if (FAILED(InitDirectShow(hWnd)))
+            return 0;
+
         if (SUCCEEDED(InitGeometry()))
         {
             ShowWindow(hWnd, SW_SHOWDEFAULT);

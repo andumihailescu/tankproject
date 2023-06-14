@@ -1,6 +1,12 @@
 #include <Windows.h>
 #include <mmsystem.h>
 #include <d3dx9.h>
+#include <dinput.h>
+
+#pragma comment (lib, "d3d9.lib")
+#pragma comment (lib, "d3dx9.lib")
+#pragma comment (lib, "dinput8.lib")
+#pragma comment (lib, "dxguid.lib")
 
 LPDIRECT3D9             g_pD3D = NULL;
 LPDIRECT3DDEVICE9       g_pd3dDevice = NULL;
@@ -10,6 +16,18 @@ LPD3DXMESH              g_pMesh = NULL;
 D3DMATERIAL9*           g_pMeshMaterials = NULL;
 LPDIRECT3DTEXTURE9*     g_pMeshTextures = NULL;
 DWORD                   g_dwNumMaterials = 0L;
+
+LPDIRECTINPUT8				g_pDin;
+LPDIRECTINPUTDEVICE8		g_pDinKeyboard;
+
+LPDIRECTINPUTDEVICE8		g_Mouse;
+DIMOUSESTATE				buffered_mouse;
+DIMOUSESTATE				mouse_state;
+
+BYTE						g_Keystate[256];
+
+float rotateY = 0;
+float translateX = 0;
 
 HRESULT InitD3D(HWND hWnd)
 {
@@ -39,6 +57,53 @@ HRESULT InitD3D(HWND hWnd)
     g_pd3dDevice->SetRenderState(D3DRS_AMBIENT, 0xffffffff);
 
     return S_OK;
+}
+
+HRESULT InitDInput(HINSTANCE hInstance, HWND hWnd)
+{
+
+    DirectInput8Create(hInstance,
+        DIRECTINPUT_VERSION,
+        IID_IDirectInput8,
+        (void**)&g_pDin,
+        NULL);
+
+    g_pDin->CreateDevice(GUID_SysKeyboard, &g_pDinKeyboard, NULL);
+
+    g_pDin->CreateDevice(GUID_SysMouse, &g_Mouse, NULL);
+
+    g_Mouse->SetDataFormat(&c_dfDIMouse);
+
+    g_Mouse->SetCooperativeLevel(hWnd, DISCL_NONEXCLUSIVE | DISCL_FOREGROUND);
+
+    g_pDinKeyboard->SetDataFormat(&c_dfDIKeyboard);
+
+    g_pDinKeyboard->SetCooperativeLevel(hWnd, DISCL_NONEXCLUSIVE | DISCL_FOREGROUND);
+
+    return S_OK;
+}
+
+VOID DetectInput()
+{
+    g_Mouse->Acquire();
+
+    g_Mouse->GetDeviceState(sizeof(DIMOUSESTATE), (LPVOID)&mouse_state);
+
+    g_pDinKeyboard->Acquire();
+
+    g_pDinKeyboard->GetDeviceState(256, (LPVOID)g_Keystate);
+}
+
+void ProccesInput()
+{
+    if (g_Keystate[DIK_S] & 0x80)
+        translateX -= 0.1;
+    if (g_Keystate[DIK_W] & 0x80)
+        translateX += 0.1;
+    if (g_Keystate[DIK_D] & 0x80)
+        rotateY += 0.1;
+    if (g_Keystate[DIK_A] & 0x80)
+        rotateY -= 0.1;
 }
 
 HRESULT InitGeometry()
@@ -150,11 +215,23 @@ VOID Render()
     {
         SetupMatrices();
 
+        D3DXMATRIX g_Transform;
+        D3DXMATRIX g_TranslateX;
+        D3DXMATRIX g_RotateY;
+
+        D3DXMatrixIdentity(&g_Transform);
+        D3DXMatrixIdentity(&g_TranslateX);
+        D3DXMatrixIdentity(&g_RotateY);
+        D3DXMatrixTranslation(&g_TranslateX, translateX, 0, 0);
+        D3DXMatrixRotationY(&g_RotateY, rotateY);
+        g_Transform = g_TranslateX * g_RotateY;
+        g_pd3dDevice->SetTransform(D3DTS_WORLD, &g_Transform);
+
         for (DWORD i = 0; i < g_dwNumMaterials; i++)
         {
             g_pd3dDevice->SetMaterial(&g_pMeshMaterials[i]);
             g_pd3dDevice->SetTexture(0, g_pMeshTextures[i]);
-            SetupMatrices();
+            //SetupMatrices();
             g_pMesh->DrawSubset(i);
         }
 
@@ -179,18 +256,18 @@ LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, INT)
 {
-    // Register the window class
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, MsgProc, 0L, 0L,
                       GetModuleHandle(NULL), NULL, NULL, NULL, NULL,
                       "Main", NULL };
     RegisterClassEx(&wc);
 
     HWND hWnd = CreateWindow("Main", "Tank Project",
-        WS_OVERLAPPEDWINDOW, 100, 100, 300, 300,
+        WS_OVERLAPPEDWINDOW, 100, 100, 700, 700,
         GetDesktopWindow(), NULL, wc.hInstance, NULL);
 
     if (SUCCEEDED(InitD3D(hWnd)))
     {
+        InitDInput(hInst, hWnd);
         if (SUCCEEDED(InitGeometry()))
         {
             ShowWindow(hWnd, SW_SHOWDEFAULT);
@@ -207,6 +284,8 @@ INT WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, INT)
                 }
                 else
                 {
+                    DetectInput();
+                    ProccesInput();
                     Render();
                 }  
             }
